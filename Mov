@@ -1,0 +1,378 @@
+from flask import Flask, render_template_string, request, redirect, url_for, send_file
+import requests
+import io
+from openpyxl import Workbook
+
+API_KEY = 'fa72850d'  #
+
+app = Flask(__name__)
+movie_database = []
+
+navbar = '''
+<div style="background:#181818; padding:16px 0; text-align:center; box-shadow:0 2px 8px rgba(0,0,0,0.2);">
+    <a href="{{ url_for('main') }}" style="color:#fff; margin:0 18px; text-decoration:none; font-weight:bold;">Home</a>
+    <a href="{{ url_for('add_movie') }}" style="color:#fff; margin:0 18px; text-decoration:none; font-weight:bold;">Add Movie</a>
+    <a href="{{ url_for('about') }}" style="color:#fff; margin:0 18px; text-decoration:none; font-weight:bold;">About</a>
+    <a href="{{ url_for('print_collection') }}" style="color:#fff; margin:0 18px; text-decoration:none; font-weight:bold;">Print Collection</a>
+    <a href="{{ url_for('export_excel') }}" style="color:#fff; margin:0 18px; text-decoration:none; font-weight:bold;">Export to Excel</a>
+</div>
+'''
+
+main_page = '''
+<!doctype html>
+<html>
+<head>
+<title>Movie Shelf</title>
+<style>
+body {
+    background: #222;
+    color: #eee;
+    font-family: 'Segoe UI', Arial, sans-serif;
+    margin: 0;
+    padding: 0;
+}
+h1 {
+    text-align: center;
+    margin-top: 30px;
+    letter-spacing: 2px;
+}
+.shelf-container {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 32px;
+    justify-content: center;
+    padding: 40px 0 60px 0;
+    background: repeating-linear-gradient(
+        to bottom,
+        #444 0px,
+        #444 8px,
+        #222 8px,
+        #222 60px
+    );
+    min-height: 100vh;
+}
+.dvd-case {
+    width: 160px;
+    background: #333;
+    border-radius: 12px;
+    box-shadow: 0 6px 24px rgba(0,0,0,0.5), 0 2px 8px rgba(0,0,0,0.3);
+    padding: 16px 12px 18px 12px;
+    text-align: center;
+    position: relative;
+    transition: transform 0.2s, box-shadow 0.2s;
+}
+.dvd-case:hover {
+    transform: translateY(-10px) scale(1.04);
+    box-shadow: 0 16px 32px rgba(0,0,0,0.7), 0 4px 16px rgba(0,0,0,0.4);
+    z-index: 2;
+}
+.dvd-cover {
+    width: 120px;
+    height: 180px;
+    object-fit: cover;
+    border-radius: 6px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.4);
+    background: #555;
+    margin-bottom: 10px;
+}
+.dvd-title {
+    font-weight: bold;
+    font-size: 1.1em;
+    margin: 6px 0 2px 0;
+    color: #fff;
+}
+.dvd-meta {
+    font-size: 0.95em;
+    color: #ccc;
+    margin-bottom: 2px;
+}
+.delete-btn {
+    background: #c00;
+    color: #fff;
+    border: none;
+    border-radius: 6px;
+    padding: 5px 12px;
+    margin-top: 10px;
+    cursor: pointer;
+    font-size: 0.95em;
+    transition: background 0.2s;
+}
+.delete-btn:hover {
+    background: #f33;
+}
+.search-form {
+    display: flex;
+    justify-content: center;
+    gap: 10px;
+    margin: 18px 0 0 0;
+}
+.search-form input[type="text"] {
+    padding: 7px 10px;
+    border-radius: 6px;
+    border: none;
+    font-size: 1em;
+    width: 140px;
+}
+.search-form input[type="submit"] {
+    padding: 7px 18px;
+    border-radius: 6px;
+    border: none;
+    background: #08c;
+    color: #fff;
+    font-weight: bold;
+    cursor: pointer;
+    transition: background 0.2s;
+}
+.search-form input[type="submit"]:hover {
+    background: #06a;
+}
+</style>
+</head>
+<body>
+''' + navbar + '''
+<h1>My DVD Shelf</h1>
+<form class="search-form" action="{{ url_for('search') }}" method="get">
+    <input type="text" name="actor" placeholder="Actor">
+    <input type="text" name="genre" placeholder="Genre">
+    <input type="text" name="director" placeholder="Director">
+    <input type="text" name="year" placeholder="Year">
+    <input type="submit" value="Search">
+</form>
+<div class="shelf-container">
+{% for movie in movies %}
+    <div class="dvd-case">
+        {% if movie['cover'] %}
+            <img src="{{ movie['cover'] }}" class="dvd-cover" alt="Cover">
+        {% else %}
+            <div class="dvd-cover" style="display:flex;align-items:center;justify-content:center;color:#aaa;font-size:1.2em;">No Cover</div>
+        {% endif %}
+        <div class="dvd-title">{{ movie['title'] }}</div>
+        <div class="dvd-meta">{{ movie['year'] }}</div>
+        <div class="dvd-meta">{{ movie['genre'] }}</div>
+        <div class="dvd-meta">{{ movie['director'] }}</div>
+        <div class="dvd-meta">{{ movie['actors'] }}</div>
+        <form action="{{ url_for('delete_movie', idx=loop.index0) }}" method="post">
+            <button class="delete-btn" type="submit">Delete</button>
+        </form>
+    </div>
+{% endfor %}
+</div>
+</body>
+</html>
+'''
+
+add_page = '''
+<!doctype html>
+<html>
+<head>
+<title>Add Movie</title>
+<style>
+body { background: #222; color: #eee; font-family: 'Segoe UI', Arial, sans-serif; }
+h1 { text-align: center; margin-top: 30px; }
+.form-container { width: 320px; margin: 40px auto; background: #333; padding: 24px 32px; border-radius: 12px; box-shadow: 0 4px 16px rgba(0,0,0,0.4);}
+input[type="text"] { width: 100%; padding: 8px; margin-bottom: 14px; border-radius: 6px; border: none; font-size: 1em; }
+input[type="submit"] { background: #08c; color: #fff; border: none; border-radius: 8px; padding: 10px 0; width: 100%; font-size: 1.1em; font-weight: bold; cursor: pointer; transition: background 0.2s;}
+input[type="submit"]:hover { background: #06a; }
+label { font-size: 1em; }
+a { color: #08c; text-decoration: none; display: block; margin-top: 18px; text-align: center; }
+a:hover { text-decoration: underline; }
+</style>
+</head>
+<body>
+''' + navbar + '''
+<h1>Add a Movie</h1>
+<div class="form-container">
+<form method="post">
+    <label>Movie Title:</label>
+    <input name="title" type="text" required><br>
+    <label><input type="checkbox" name="use_internet" value="yes"> Fetch details from OMDb</label><br>
+    <input type="submit" value="Add Movie">
+</form>
+</div>
+</body>
+</html>
+'''
+
+about_page = '''
+<!doctype html>
+<html>
+<head>
+<title>About</title>
+<style>
+body { background: #222; color: #eee; font-family: 'Segoe UI', Arial, sans-serif; }
+h1 { text-align: center; margin-top: 40px; }
+.about-container { width: 400px; margin: 60px auto; background: #333; padding: 32px 40px; border-radius: 14px; box-shadow: 0 4px 16px rgba(0,0,0,0.4);}
+p { font-size: 1.2em; text-align: center; }
+</style>
+</head>
+<body>
+''' + navbar + '''
+<h1>About</h1>
+<div class="about-container">
+    <p>Created by: Michael Palmer 2026</p>
+</div>
+</body>
+</html>
+'''
+
+print_page = '''
+<!doctype html>
+<html>
+<head>
+<title>Print Movie Collection</title>
+<style>
+body { background: #fff; color: #222; font-family: Arial, sans-serif; }
+h1 { text-align: center; }
+.shelf-container { display: flex; flex-wrap: wrap; gap: 24px; justify-content: center; }
+.dvd-case { width: 160px; background: #eee; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); padding: 12px; text-align: center; }
+.dvd-cover { width: 120px; height: 180px; object-fit: cover; border-radius: 6px; background: #ccc; margin-bottom: 10px; }
+.dvd-title { font-weight: bold; font-size: 1.1em; margin: 6px 0 2px 0; color: #222; }
+.dvd-meta { font-size: 0.95em; color: #444; margin-bottom: 2px; }
+@media print { .navbar, .print-btn { display: none; } }
+</style>
+</head>
+<body>
+<h1>My DVD Shelf (Printable)</h1>
+<button class="print-btn" onclick="window.print()" style="margin:20px auto;display:block;">Print This Page</button>
+<div class="shelf-container">
+{% for movie in movies %}
+    <div class="dvd-case">
+        {% if movie['cover'] %}
+            <img src="{{ movie['cover'] }}" class="dvd-cover" alt="Cover">
+        {% else %}
+            <div class="dvd-cover" style="display:flex;align-items:center;justify-content:center;color:#888;font-size:1.2em;">No Cover</div>
+        {% endif %}
+        <div class="dvd-title">{{ movie['title'] }}</div>
+        <div class="dvd-meta">{{ movie['year'] }}</div>
+        <div class="dvd-meta">{{ movie['genre'] }}</div>
+        <div class="dvd-meta">{{ movie['director'] }}</div>
+        <div class="dvd-meta">{{ movie['actors'] }}</div>
+    </div>
+{% endfor %}
+</div>
+</body>
+</html>
+'''
+
+search_page = main_page.replace('My DVD Shelf', 'Search Results')
+
+def get_movie_details(title):
+    """Fetch movie details and poster from OMDb API."""
+    url = 'http://www.omdbapi.com/'
+    params = {'t': title, 'apikey': API_KEY}
+    response = requests.get(url, params=params)
+    if response.status_code == 200:
+        data = response.json()
+        if data.get('Response') == 'True':
+            cover_url = data['Poster'] if data['Poster'] != "N/A" else ""
+            return {
+                "title": data['Title'],
+                "genre": data['Genre'],
+                "year": data['Year'],
+                "director": data['Director'],
+                "actors": data['Actors'],
+                "rating": data['imdbRating'],
+                "plot": data['Plot'],
+                "cover": cover_url
+            }
+    return None
+
+@app.route('/')
+def main():
+    return render_template_string(main_page, movies=movie_database)
+
+@app.route('/add', methods=['GET', 'POST'])
+def add_movie():
+    if request.method == 'POST':
+        title = request.form['title']
+        use_internet = request.form.get('use_internet')
+        if use_internet == 'yes':
+            movie = get_movie_details(title)
+            if not movie:
+                movie = {
+                    "title": title,
+                    "genre": "",
+                    "year": "",
+                    "director": "",
+                    "actors": "",
+                    "rating": "",
+                    "plot": "",
+                    "cover": ""
+                }
+        else:
+            movie = {
+                "title": title,
+                "genre": "",
+                "year": "",
+                "director": "",
+                "actors": "",
+                "rating": "",
+                "plot": "",
+                "cover": ""
+            }
+        movie_database.append(movie)
+        return redirect(url_for('main'))
+    return render_template_string(add_page)
+
+@app.route('/about')
+def about():
+    return render_template_string(about_page)
+
+@app.route('/print')
+def print_collection():
+    return render_template_string(print_page, movies=movie_database)
+
+@app.route('/export_excel')
+def export_excel():
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Movie Collection"
+    ws.append(["Title", "Year", "Genre", "Director", "Actors", "Rating", "Plot", "Cover URL"])
+    for movie in movie_database:
+        ws.append([
+            movie.get('title', ''),
+            movie.get('year', ''),
+            movie.get('genre', ''),
+            movie.get('director', ''),
+            movie.get('actors', ''),
+            movie.get('rating', ''),
+            movie.get('plot', ''),
+            movie.get('cover', '')
+        ])
+    file_stream = io.BytesIO()
+    wb.save(file_stream)
+    file_stream.seek(0)
+    return send_file(
+        file_stream,
+        as_attachment=True,
+        download_name="movie_collection.xlsx",
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
+
+@app.route('/delete/<int:idx>', methods=['POST'])
+def delete_movie(idx):
+    if 0 <= idx < len(movie_database):
+        del movie_database[idx]
+    return redirect(url_for('main'))
+
+@app.route('/search')
+def search():
+    actor = request.args.get('actor', '').lower()
+    genre = request.args.get('genre', '').lower()
+    director = request.args.get('director', '').lower()
+    year = request.args.get('year', '').lower()
+    matches = []
+    for movie in movie_database:
+        if actor and actor not in movie['actors'].lower():
+            continue
+        if genre and genre not in movie['genre'].lower():
+            continue
+        if director and director not in movie['director'].lower():
+            continue
+        if year and year not in movie['year'].lower():
+            continue
+        matches.append(movie)
+    return render_template_string(search_page, movies=matches)
+
+if __name__ == '__main__':
+    app.run(debug=True)
